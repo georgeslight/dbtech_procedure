@@ -1,19 +1,169 @@
+---- Slight Neira, George, 580245
+---- Nguyen, Minh Thu, 568420
+
 create or replace package body cooling_service as
 
-
+---- Code mit Hilfe von https://www.datenbank-plsql.de/sql.htm
+                    ----https://www.datenbank-plsql.de/plsql-block.htm
+                    ----https://www.datenbank-plsql.de/ausgabe.htm
+                   -----http://www.dba-oracle.com/t_easyoracle_pl_sql_FOR_Loop.htm
+  
   -----------------------------------------------------------------------------  
-  -- transfer_sample
+  -- f_checkSampleExist
+  ---return if sample exists
+  -----------------------------------------------------------------------------
+function f_checkSampleExist(
+    v_sampleId in sample.sampleid%type)
+        return boolean
+  is
+    v_count_sample NUMBER(1) := 0;
+  begin
+    select count(sample.sampleid)
+    into v_count_sample
+    from Sample
+    where sample.sampleid = v_sampleId ;
+    if(v_count_sample > 0) then
+      return true;
+    else
+      return false;
+    end if;
+end f_checkSampleExist;
+
+ -----------------------------------------------------------------------------  
+  -- f_getSampleById
+  --function find sample by ID
+  -----------------------------------------------------------------------------  
+function  f_getSampleById
+    (p_sample_id in sample.sampleId%type)
+    return sample%rowtype
+    as
+        exc_cooling_system exception;
+        pragma exception_init(exc_cooling_system, -20002);
+        l_cust_record sample%rowtype;
+    begin
+        select * into l_cust_record from sample
+            where sampleId = p_sample_id;
+        dbms_output.put_line('Sample found: ' || p_sample_id);    
+
+        return(l_cust_record);
+    exception
+        when no_data_found then
+            dbms_output.put_line('Sample not found: ' || p_sample_id);
+            raise exc_cooling_system;
+        when too_many_rows then
+            dbms_output.put_line('too_many_rows_exception');
+    end;
+
+ -----------------------------------------------------------------------------  
+ --f_checkFreePlace
+ --return the number of free place to add
+  -----------------------------------------------------------------------------  
+function f_checkFreePlace(
+        p_trayId in tray.trayid%type,
+        p_capacity in tray.capacity%type
+        )
+    return number
+    as 
+        v_count number(1) := 0;
+        v_position number(1) := 0;
+    begin 
+    for
+        i in 1..p_capacity 
+    loop 
+        select count(p.trayid)
+        into v_count
+        from place p
+        where p.trayid = p_trayId and p.placeNo = i;
+        if v_count = 0 then v_position :=i;
+            exit;
+        end if;
+    end loop;
+    return v_position;
+    end f_checkFreePlace;
+    
+     
+  -----------------------------------------------------------------------------  
+  -- p_addToPlace
+  -- add to place at the position number
+  ----------------------------------------------------------------------------- 
+    procedure p_addToPlace(
+     p_tray_id in tray.trayid%type,
+     p_position number,
+     p_sample_id in sample.sampleid%type
+    )
+    as
+    begin
+      insert
+      into place
+      values (p_tray_id, p_position, p_sample_id);
+end P_addToPlace;
+
+     -----------------------------------------------------------------------------  
+  -- p_getSampleByTray
+  ----------------------------------------------------------------------------- 
+    procedure p_getSampleByTray(
+        p_sample_id in sample.sampleid%type,
+        p_diameter_in_cm in tray.diameterincm%type
+        )
+    is
+        v_sample sample%rowtype;
+        v_tray tray%rowtype;
+        v_selectedTray tray%rowtype;
+        v_position number;
+        cursor cur_tray (diameter_in_cm in tray.diameterincm%type)
+    is
+        select * from tray 
+        where tray.diameterincm = diameter_in_cm;
+    begin
+        v_sample := f_getSampleById(p_sample_id);
+        open cur_tray(p_diameter_in_cm);
+    loop 
+        fetch cur_tray into v_tray;
+        if cur_tray%notfound then 
+            exit;
+        end if;
+        if (v_tray.expirationdate >= v_sample.expirationdate) then
+            v_position := f_checkFreePlace(v_tray.trayid, v_tray.capacity);
+            if v_position > 0 then 
+                v_selectedTray := v_tray;
+                exit;
+            end if;
+        end if;
+        if(v_tray.expirationdate is null) then
+            v_position := f_checkFreePlace(v_tray.trayid, v_tray.capacity);
+            if v_position > 0 then 
+                            update tray
+                set tray.expirationdate = v_sample.expirationdate + 30
+                where tray.trayid = v_tray.trayid;
+                    v_selectedTray := v_tray;
+                    exit;
+            end if;
+            end if;
+        end loop;
+    
+    if cur_tray%rowcount = 0 then
+        raise_application_error(-20002, ' 0 - Tray found');
+    end if;
+    close cur_tray;
+    
+    if v_selectedTray.trayid is null then
+        raise_application_error(-20002, ' 0 - Sample found');
+        end if;
+    p_addToPlace(v_selectedTray.trayid , v_position, p_sample_id);
+    end p_getSampleByTray;
+   
+  -----------------------------------------------------------------------------  
+      -- transfer_sample
   -----------------------------------------------------------------------------  
   procedure transfer_sample(
-    p_sample_id sample.sampleid%type, 
+    p_sample_id sample.sampleid%type,
     p_diameter_in_cm tray.diameterincm%type
-  ) as
-  begin
-    null;
-  end transfer_sample; 
-
-
-  
-
-end cooling_service;
-
+    ) as
+    begin 
+        if(f_checkSampleExist(p_sample_id) = false) then
+            dbms_output.put_line('Sample not found');
+            raise exc_cooling_system ;
+        end if; 
+        p_getSampleByTray(p_sample_id, p_diameter_in_cm);
+        end transfer_sample;
+end;
